@@ -7,6 +7,8 @@ import pickle
 import threading
 import queue
 import time
+import json
+from .shared_frame_buffer import SharedFrameManager
 
 
 class SubprocessPoseDetector:
@@ -22,6 +24,10 @@ class SubprocessPoseDetector:
         
         # Solo thread de output ya que no enviamos input
         self.output_thread = None
+        
+        # Gestor de memoria compartida para frames
+        self.shared_buffer_name = None
+        self.frame_manager = None
     
     def start(self):
         """Inicia el proceso de pose detection de forma no bloqueante"""
@@ -40,15 +46,28 @@ class SubprocessPoseDetector:
             print("Creando proceso worker...")
             
             # Iniciar proceso worker - solo stdout para recibir resultados
+            # Usar el python del venv para tener acceso a MediaPipe
+            venv_python = './venv/bin/python'
             self.process = subprocess.Popen(
-                ['python', 'pose_worker.py'],
+                [venv_python, 'pose_worker.py'],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
-                cwd='.'  # Asegurar directorio correcto
+                cwd='.',  # Asegurar directorio correcto
+                env={'PYTHONPATH': '.'}  # Asegurar que encuentre módulos locales
             )
             
             print(f"Subprocess pose detector iniciado: PID {self.process.pid}")
+            
+            # Verificar que el proceso arrancó bien
+            time.sleep(0.1)  # Dar tiempo para que se inicie
+            if self.process.poll() is not None:
+                stdout, stderr = self.process.communicate()
+                print(f"Worker terminó inmediatamente con código: {self.process.returncode}")
+                print(f"Worker stdout: {stdout.decode() if stdout else 'vacío'}")
+                print(f"Worker stderr: {stderr.decode() if stderr else 'vacío'}")
+                return
+            
             self.running = True
             
             # Solo necesitamos threads de output y error
@@ -65,13 +84,17 @@ class SubprocessPoseDetector:
             self.running = False
     
     def _error_worker(self):
-        """Thread para capturar errores del subprocess"""
+        """Thread que maneja stderr del proceso worker"""
         while self.running and self.process and self.process.poll() is None:
             try:
                 line = self.process.stderr.readline()
                 if line:
-                    print(f"Worker stderr: {line.decode().strip()}")
-            except:
+                    error_msg = line.decode('utf-8').strip()
+                    print(f"Worker stderr: {error_msg}")
+                else:
+                    break
+            except Exception as e:
+                print(f"Error leyendo stderr: {e}")
                 break
     
     def _input_worker(self):
@@ -96,8 +119,17 @@ class SubprocessPoseDetector:
                     print(f"Error leyendo datos: esperado {result_size}, recibido {len(result_data)}")
                     break
                 
-                # Deserializar resultado
-                result = pickle.loads(result_data)
+                # Deserializar resultado JSON
+                result = json.loads(result_data.decode('utf-8'))
+                
+                # Si es mensaje de inicialización, configurar memoria compartida
+                if result.get('type') == 'init':
+                    self.shared_buffer_name = result.get('shared_buffer_name')
+                    if self.shared_buffer_name:
+                        self.frame_manager = SharedFrameManager()
+                        self.frame_manager.connect_buffer(self.shared_buffer_name)
+                        print(f"Conectado a buffer compartido: {self.shared_buffer_name}")
+                    continue
                 
                 # Añadir a queue de salida
                 try:
@@ -132,9 +164,22 @@ class SubprocessPoseDetector:
         
         try:
             result = self.output_queue.get_nowait()
+            # Debug: mostrar cada ciertos resultados
+            frame_id = result.get('frame_id', 0)
+            if frame_id % 100 == 0:
+                print(f"UI: Resultado recibido frame {frame_id}, pose: {'sí' if result.get('pose_detected') else 'no'}")
             return result
         except queue.Empty:
             return None
+    
+    def get_latest_frame(self):
+        """
+        Obtiene el frame más reciente desde memoria compartida
+        """
+        if not self.frame_manager:
+            return None, 0
+        
+        return self.frame_manager.get_latest_frame()
     
     def is_alive(self):
         """Verifica si el proceso está activo"""
@@ -148,6 +193,11 @@ class SubprocessPoseDetector:
             return
         
         self.running = False
+        
+        # Limpiar memoria compartida
+        if self.frame_manager:
+            self.frame_manager.cleanup()
+            self.frame_manager = None
         
         # Terminar proceso
         if self.process:

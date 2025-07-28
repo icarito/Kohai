@@ -44,7 +44,13 @@ class VideoWidget(Gtk.Box):
         # Estado del procesamiento
         self.last_processed_frame = None
         self.overlay_enabled = True
-        self.frame_skip_counter = 0  # Para procesar 1 de cada 3 frames
+        self.frame_skip_counter = 0
+        self.last_frame_from_worker = None  # Para almacenar último frame del worker
+        
+        # Estados para suavidad de pose
+        self.last_pose_result = None
+        self.last_pose_timestamp = time.time()
+        self.pose_timeout = 0.5  # Reducido a 0.5 segundos para mayor responsividad
         
         # Setup UI
         self.setup_ui()
@@ -52,7 +58,7 @@ class VideoWidget(Gtk.Box):
         
         # NO inicializar cámara inmediatamente - puede causar bloqueos
         # Se inicializará de forma asíncrona cuando la ventana esté lista
-        print("VideoWidget inicializado (cámara pendiente)")
+        print("VideoWidget inicializado (esperando worker para video)")
     
     def start_analysis_process(self):
         """
@@ -161,64 +167,127 @@ class VideoWidget(Gtk.Box):
         try:
             # Solo crear un frame dummy para mostrar algo inicial
             dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(dummy_frame, "Iniciando detector de pose...", 
+            cv2.putText(dummy_frame, "Conectando con detector...", 
                        (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             
             self.running = True
             
-            # Timer solo para actualizar resultados del detector
-            GLib.timeout_add(50, self.update_frame)  # 20 FPS para UI responsiva
+            # Timer para actualizar UI - MÁXIMA FLUIDEZ
+            GLib.timeout_add(16, self.update_frame)  # ~60 FPS para máxima responsividad
             
             # Mostrar frame inicial
             self.update_video_display(dummy_frame)
             
-            print("Sistema de video inicializado (sin cámara local)")
+            print("Sistema de video inicializado (esperando frames del worker)")
                 
         except Exception as e:
             print(f"Error inicializando sistema de video: {e}")
     
     def update_frame(self):
-        """Actualiza UI solo con resultados del detector - sin captura de video"""
+        """Actualiza UI con frames y resultados del worker"""
         if not self.running:
             return False
         
         try:
-            # Ya no capturamos frames - solo procesamos resultados del detector
             display_frame = None
+            current_pose_result = None
             
-            # Obtener resultado procesado si está disponible
+            # Obtener TODOS los resultados disponibles para usar el más reciente
             if self.pose_detector:
                 try:
-                    result = self.pose_detector.get_result()
-                    if result:
-                        # Crear frame base desde las dimensiones del worker
-                        frame_shape = result.get('frame_shape', (240, 320, 3))
-                        base_frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Frame escalado para UI
-                        
-                        # Si hay landmarks y overlay habilitado, dibujar
-                        if (result.get('pose_detected') and 
-                            result.get('landmarks') and 
+                    # Leer todos los resultados disponibles para evitar lag
+                    while True:
+                        result = self.pose_detector.get_result()
+                        if result is None:
+                            break
+                        current_pose_result = result  # Quedarse con el más reciente
+                        # Actualizar timestamp y estado si tenemos resultado válido
+                        if result.get('pose_detected'):
+                            self.last_pose_result = result
+                            self.last_pose_timestamp = time.time()
+                    
+                    # Si no tenemos resultado nuevo, usar el último válido si no ha expirado
+                    if (current_pose_result is None and 
+                        self.last_pose_result is not None and 
+                        (time.time() - self.last_pose_timestamp) < self.pose_timeout):
+                        current_pose_result = self.last_pose_result
+                    
+                    # Obtener frame desde memoria compartida
+                    shared_frame, frame_counter = self.pose_detector.get_latest_frame()
+                    
+                    if shared_frame is not None:
+                        # Usar frame de memoria compartida como base
+                        base_frame = shared_frame.copy()
+                        self.last_frame_from_worker = base_frame
+                    elif self.last_frame_from_worker is not None:
+                        # Usar último frame disponible
+                        base_frame = self.last_frame_from_worker
+                    else:
+                        # Frame dummy si aún no tenemos frames
+                        base_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                        cv2.putText(base_frame, "Conectando...", 
+                                   (250, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    
+                    # Escalar a tamaño de UI
+                    display_frame = cv2.resize(base_frame, (640, 480))
+                    
+                    # Si hay resultado de pose, procesar landmarks
+                    if current_pose_result:
+                        # Si hay landmarks y overlay habilitado, dibujar con nivel de confianza
+                        if (current_pose_result.get('pose_detected') and 
+                            current_pose_result.get('landmarks') and 
                             self.overlay_enabled):
-                            display_frame = self._draw_pose_landmarks(base_frame.copy(), result['landmarks'], frame_shape)
-                        else:
-                            display_frame = base_frame
+                            confidence = current_pose_result.get('pose_confidence', 'high')
+                            display_frame = self._draw_pose_landmarks(display_frame, current_pose_result['landmarks'], confidence)
                             
-                        # Añadir texto de estado
-                        status = "POSE DETECTADA" if result.get('pose_detected') else "Sin pose"
+                        # Añadir texto de estado con información de confianza y persistencia
+                        confidence = current_pose_result.get('pose_confidence', 'unknown')
+                        frames_since = current_pose_result.get('frames_since_detection', 0)
+                        
+                        if current_pose_result.get('pose_detected'):
+                            if confidence == 'high':
+                                status = "POSE DETECTADA"
+                                color = (0, 255, 0)  # Verde brillante para detección real
+                            elif confidence == 'interpolated':
+                                status = f"POSE TRACKING ({frames_since})"
+                                color = (0, 255, 255)  # Amarillo para interpolado reciente
+                            elif confidence == 'fading':
+                                status = f"POSE FADING ({frames_since})"
+                                color = (0, 150, 255)  # Naranja para pose antigua
+                            else:
+                                status = "POSE DETECTADA"
+                                color = (0, 200, 0)  # Verde más suave
+                        else:
+                            status = "Sin pose"
+                            color = (0, 0, 255)  # Rojo
+                        
                         cv2.putText(display_frame, status, (10, 30), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 1, 
-                                   (0, 255, 0) if result.get('pose_detected') else (0, 0, 255), 2)
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                        
+                        # Añadir frame ID para debug
+                        frame_id = current_pose_result.get('frame_id', 0)
+                        cv2.putText(display_frame, f"Frame: {frame_id}", (10, 460), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
                         
                         # Emitir señal de pose detectada de forma asíncrona
-                        GLib.idle_add(self._emit_pose_signal, result)
+                        GLib.idle_add(self._emit_pose_signal, current_pose_result)
+                    else:
+                        # Sin resultado de pose, mostrar video en vivo
+                        cv2.putText(display_frame, "Video en vivo", (10, 30), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                     
                 except Exception as e:
                     print(f"Error procesando resultado: {e}")
                     pass  # Ignorar errores para evitar bloqueos
             
-            # Actualizar UI solo si tenemos un frame
-            if display_frame is not None:
-                self.update_video_display(display_frame)
+            # Si no tenemos frame, mostrar mensaje de espera
+            if display_frame is None:
+                display_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(display_frame, "Esperando detector...", 
+                           (180, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            
+            # Actualizar UI
+            self.update_video_display(display_frame)
             
         except Exception as e:
             print(f"Error en update_frame: {e}")
@@ -303,48 +372,81 @@ class VideoWidget(Gtk.Box):
         
         return frame
     
-    def _draw_pose_landmarks(self, frame, landmarks, source_frame_shape=None):
-        """Dibuja landmarks de pose en el frame usando OpenCV"""
+    def _draw_pose_landmarks(self, frame, landmarks, confidence='high'):
+        """Dibuja landmarks de pose con efectos visuales basados en confianza"""
         try:
             height, width = frame.shape[:2]
             
-            # Si los landmarks vienen de un frame de diferente tamaño, calcular escalado
-            scale_x = scale_y = 1.0
-            if source_frame_shape is not None:
-                source_height, source_width = source_frame_shape[:2]
-                scale_x = width / source_width
-                scale_y = height / source_height
+            # Ajustar opacidad y colores basado en confianza
+            if confidence == 'high':
+                alpha = 1.0
+                line_thickness = 3
+                point_radius_mult = 1.0
+            elif confidence == 'interpolated':
+                alpha = 0.8
+                line_thickness = 2
+                point_radius_mult = 0.9
+            elif confidence == 'fading':
+                alpha = 0.5
+                line_thickness = 2
+                point_radius_mult = 0.7
+            else:
+                alpha = 0.6
+                line_thickness = 2
+                point_radius_mult = 0.8
             
-            # Dibujar puntos de landmarks
+            # Preparar puntos para dibujo eficiente
+            points = []
             for landmark in landmarks:
-                if landmark['visibility'] > 0.5:  # Solo dibujar si es visible
+                if landmark['visibility'] > 0.3:  # Umbral más bajo para más puntos
                     x = int(landmark['x'] * width)
                     y = int(landmark['y'] * height)
-                    cv2.circle(frame, (x, y), 4, (0, 255, 0), -1)  # Puntos más grandes
+                    points.append((x, y))
+                else:
+                    points.append(None)
             
-            # Dibujar algunas conexiones principales (esqueleto simplificado)
-            connections = [
+            # Crear overlay para efectos de transparencia
+            overlay = frame.copy()
+            
+            # Dibujar puntos con colores ajustados por confianza
+            for i, point in enumerate(points):
+                if point:
+                    # Color basado en la importancia del landmark
+                    if i in [11, 12, 23, 24]:  # Torso - azul
+                        color = (255, 0, 0)
+                        radius = int(6 * point_radius_mult)
+                    elif i in [13, 14, 15, 16]:  # Brazos - verde
+                        color = (0, 255, 0)
+                        radius = int(5 * point_radius_mult)
+                    elif i in [25, 26, 27, 28]:  # Piernas - rojo
+                        color = (0, 0, 255)
+                        radius = int(5 * point_radius_mult)
+                    else:  # Otros - amarillo
+                        color = (0, 255, 255)
+                        radius = int(4 * point_radius_mult)
+                    
+                    cv2.circle(overlay, point, radius, color, -1)
+            
+            # Dibujar conexiones principales con grosor ajustado
+            important_connections = [
                 # Torso principal
                 (11, 12), (11, 23), (12, 24), (23, 24),
-                # Brazos
+                # Brazos principales  
                 (11, 13), (13, 15), (12, 14), (14, 16),
                 # Piernas principales
                 (23, 25), (25, 27), (24, 26), (26, 28),
-                # Cabeza básica
+                # Cabeza principal
                 (0, 1), (1, 2), (2, 3), (0, 4), (4, 5), (5, 6)
             ]
             
-            for connection in connections:
-                if (connection[0] < len(landmarks) and connection[1] < len(landmarks)):
-                    landmark1 = landmarks[connection[0]]
-                    landmark2 = landmarks[connection[1]]
-                    
-                    if (landmark1['visibility'] > 0.5 and landmark2['visibility'] > 0.5):
-                        x1 = int(landmark1['x'] * width)
-                        y1 = int(landmark1['y'] * height)
-                        x2 = int(landmark2['x'] * width)
-                        y2 = int(landmark2['y'] * height)
-                        cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 255), 3)  # Líneas más gruesas
+            for connection in important_connections:
+                if (connection[0] < len(points) and connection[1] < len(points) and
+                    points[connection[0]] and points[connection[1]]):
+                    cv2.line(overlay, points[connection[0]], points[connection[1]], 
+                            (0, 255, 255), line_thickness)  # Líneas amarillas
+            
+            # Aplicar overlay con transparencia
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
             
             return frame
             
