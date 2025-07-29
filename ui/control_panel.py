@@ -94,36 +94,70 @@ class ControlPanel(Gtk.Box):
         self.setup_ui()
     
     def setup_ui(self):
-        """Configura la interfaz del panel de control con pestañas."""
-        
-        title = Gtk.Label()
-        title.set_markup('<span size="medium" weight="bold">Panel de Control</span>')
-        title.set_halign(Gtk.Align.START)
-        title.set_margin_bottom(10)
-        self.append(title)
+        """Configura la interfaz del panel de control con técnicas en la parte superior."""
+        # Sección de selección de técnicas (fuera de pestañas)
+        self.append(self.setup_technique_selection())
 
-        # Notebook para las pestañas
+        # Notebook para las pestañas (Métricas primero, luego Captura)
         self.notebook = Gtk.Notebook()
         self.notebook.set_tab_pos(Gtk.PositionType.TOP)
+        self.notebook.set_margin_top(10)
         self.append(self.notebook)
 
-        # Crear y agregar las páginas
-        self.notebook.append_page(self.create_setup_page(), Gtk.Label(label="🥋 Técnica"))
-        self.notebook.append_page(self.create_record_page(), Gtk.Label(label="🎥 Grabar"))
-        self.notebook.append_page(self.create_analyze_page(), Gtk.Label(label="📊 Analizar"))
+        # Agregar primero la página de Métricas, luego la de Captura
+        self.notebook.append_page(self.create_analyze_page(), Gtk.Label(label="📊 Métricas"))
+        self.notebook.append_page(self.create_record_page(), Gtk.Label(label="🎥 Capturar"))
+        # Establecer la página de Métricas como la página por defecto
+        self.notebook.set_current_page(0)
 
-    def create_setup_page(self):
-        """Crea la página de 'Técnica'."""
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
-        page.set_margin_top(10)
-        page.set_margin_bottom(10)
-        page.set_margin_start(10)
-        page.set_margin_end(10)
+    def setup_technique_selection(self):
+        """Configura la sección de selección de técnicas en la parte superior"""
+        group = Adw.PreferencesGroup()
+        group.set_title("⚙️ Técnica Activa")
         
-        page.append(self.setup_category_section())
-        page.append(self.setup_technique_section())
+        # Dropdown para categorías
+        self.category_dropdown = Gtk.DropDown()
+        self.category_dropdown.set_size_request(200, -1)  # Hacer más ancho
+        self.setup_category_dropdown()
+        self.category_dropdown.connect('notify::selected', self.on_category_dropdown_changed)
         
-        return page
+        category_row = Adw.ActionRow()
+        category_row.set_title("📂 Categoría")
+        category_row.add_suffix(self.category_dropdown)
+        group.add(category_row)
+        
+        # Dropdown para técnicas específicas
+        self.technique_dropdown = Gtk.DropDown()
+        self.technique_dropdown.set_size_request(200, -1)  # Hacer más ancho
+        self.update_technique_dropdown()
+        self.technique_dropdown.connect('notify::selected', self.on_technique_changed)
+        
+        technique_row = Adw.ActionRow()
+        technique_row.set_title("🎯 Técnica")
+        technique_row.add_suffix(self.technique_dropdown)
+        group.add(technique_row)
+        
+        return group
+    
+    def setup_category_dropdown(self):
+        """Configura el dropdown de categorías"""
+        categories = [
+            ("stances", "🧘 Posiciones"),
+            ("golpes", "👊 Golpes"),
+            ("patadas", "🦵 Patadas"),
+            ("bloqueos", "🛡️ Bloqueos"),
+            ("katas", "🥋 Katas"),
+        ]
+        
+        string_list = Gtk.StringList()
+        self.category_list = []  # Para mapear índices a IDs
+        
+        for category_id, display_name in categories:
+            string_list.append(display_name)
+            self.category_list.append(category_id)
+        
+        self.category_dropdown.set_model(string_list)
+        self.category_dropdown.set_selected(0)  # Seleccionar stances por defecto
 
     def create_record_page(self):
         """Crea la página de 'Grabar'."""
@@ -151,116 +185,60 @@ class ControlPanel(Gtk.Box):
         
         return page
 
-    def setup_category_section(self):
-        """Configura la sección de selección de categoría"""
-        group = Adw.PreferencesGroup()
-        group.set_title("Categoría")
-        
-        self.category_buttons = {}
-        first_button = None
-        
-        categories = [
-            ("stances", "🧘 Stances"),
-            ("golpes", "👊 Golpes"),
-            ("patadas", "🦵 Patadas"),
-            ("bloqueos", "🛡️ Bloqueos"),
-            ("katas", "🥋 Katas"),
-        ]
-        
-        for category_id, category_label in categories:
-            if first_button is None:
-                button = Gtk.CheckButton()
-                first_button = button
-            else:
-                button = Gtk.CheckButton()
-                button.set_group(first_button)
-            
-            button.set_label(category_label)
-            button.connect('toggled', self.on_category_changed, category_id)
-            
-            self.category_buttons[category_id] = button
-            
-            row = Adw.ActionRow()
-            row.set_activatable_widget(button)
-            row.add_prefix(button)
-            group.add(row)
-        
-        self.category_buttons["stances"].set_active(True)
-        
-        return group
-    
-    def setup_technique_section(self):
-        """Configura la sección de selección de técnica"""
-        self.technique_group = Adw.PreferencesGroup()
-        self.technique_group.set_title("Técnica")
-        
-        self.technique_dropdown = Gtk.DropDown()
-        self.update_technique_dropdown()
-        self.technique_dropdown.connect('notify::selected', self.on_technique_changed)
-        
-        row = Adw.ActionRow()
-        row.set_title("Seleccionar")
-        row.add_suffix(self.technique_dropdown)
-        self.technique_group.add(row)
-        
-        return self.technique_group
-    
     def setup_recording_section(self):
-        """Configura la sección de controles de grabación"""
+        """Configura la sección de controles de grabación en una sola fila horizontal y compacta"""
         group = Adw.PreferencesGroup()
-        group.set_title("Controles")
-        
-        buttons_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        buttons_box.set_homogeneous(True)
-        
+        group.set_title("🎬 Controles de Captura")
+
+        # Botones de acción
+        actions_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        actions_box.set_homogeneous(True)
         self.capture_button = Gtk.Button(label="📸 Capturar")
         self.capture_button.add_css_class("suggested-action")
+        self.capture_button.set_tooltip_text("Captura una pose individual para análisis")
         self.capture_button.connect('clicked', self.on_capture_clicked)
-        buttons_box.append(self.capture_button)
-        
+        actions_box.append(self.capture_button)
         self.record_button = Gtk.Button(label="🎥 Grabar")
         self.record_button.add_css_class("destructive-action")
+        self.record_button.set_tooltip_text("Graba una secuencia de movimientos")
         self.record_button.connect('clicked', self.on_record_clicked)
-        buttons_box.append(self.record_button)
-        
-        buttons_row = Adw.ActionRow()
-        buttons_row.set_title("Acciones")
-        buttons_row.add_suffix(buttons_box)
-        group.add(buttons_row)
-        
-        timing_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        
+        actions_box.append(self.record_button)
+
+        # Controles de tiempo
+        timing_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        timing_box.set_homogeneous(False)
+        timing_box.append(Gtk.Label(label="Prep:"))
         self.countdown_spin = Gtk.SpinButton()
         self.countdown_spin.set_range(1, 10)
         self.countdown_spin.set_value(3)
         self.countdown_spin.set_increments(1, 1)
-        
+        self.countdown_spin.set_tooltip_text("Tiempo de preparación antes de la captura")
+        timing_box.append(self.countdown_spin)
+        timing_box.append(Gtk.Label(label="Dur:"))
         self.duration_spin = Gtk.SpinButton()
         self.duration_spin.set_range(1, 60)
         self.duration_spin.set_value(5)
         self.duration_spin.set_increments(1, 5)
-        
-        timing_box.append(Gtk.Label(label="Prep:"))
-        timing_box.append(self.countdown_spin)
-        timing_box.append(Gtk.Label(label="Dur:"))
+        self.duration_spin.set_tooltip_text("Duración de la grabación en segundos")
         timing_box.append(self.duration_spin)
-        
-        timing_row = Adw.ActionRow()
-        timing_row.set_title("Tiempos (s)")
-        timing_row.add_suffix(timing_box)
-        group.add(timing_row)
-        
+
+        # Layout horizontal y compacto
+        main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        main_box.set_homogeneous(False)
+        main_box.append(actions_box)
+        main_box.append(timing_box)
+        group.add(main_box)
         return group
     
     def setup_status_section(self):
         """Configura la sección de estado y calibración"""
         group = Adw.PreferencesGroup()
-        group.set_title("Estado")
+        group.set_title("📡 Estado del Sistema")
         
         self.pose_status_label = Gtk.Label(label="Esperando pose...")
         self.pose_status_label.set_halign(Gtk.Align.START)
         
-        status_row = Adw.ActionRow(title="Detección de Pose")
+        status_row = Adw.ActionRow(title="🔍 Detección de Pose")
         status_row.add_suffix(self.pose_status_label)
         group.add(status_row)
         
@@ -269,12 +247,12 @@ class ControlPanel(Gtk.Box):
     def setup_metrics_section(self):
         """Configura la sección de métricas en tiempo real"""
         self.metrics_group = Adw.PreferencesGroup()
-        self.metrics_group.set_title("Métricas Live")
+        self.metrics_group.set_title("📈 Análisis en Tiempo Real")
         
         self.score_label = Gtk.Label(label="--/100")
         self.score_label.set_halign(Gtk.Align.END)
         
-        score_row = Adw.ActionRow(title="Score General")
+        score_row = Adw.ActionRow(title="🏆 Puntuación General")
         score_row.add_suffix(self.score_label)
         self.metrics_group.add(score_row)
         
@@ -285,13 +263,13 @@ class ControlPanel(Gtk.Box):
     def setup_comparison_section(self):
         """Configura la sección de comparación y overlay"""
         group = Adw.PreferencesGroup()
-        group.set_title("Comparación")
+        group.set_title("🔍 Sistema de Referencia")
         
         self.overlay_switch = Gtk.Switch()
         self.overlay_switch.set_active(True)  # Activado por defecto
         self.overlay_switch.connect('notify::active', self.on_overlay_toggled)
         
-        overlay_row = Adw.ActionRow(title="Mostrar Referencia", subtitle="Overlay de técnica ideal")
+        overlay_row = Adw.ActionRow(title="👁️ Mostrar Referencia")
         overlay_row.add_suffix(self.overlay_switch)
         group.add(overlay_row)
         
@@ -299,25 +277,47 @@ class ControlPanel(Gtk.Box):
         buttons_box.set_homogeneous(True)
         
         load_ref_button = Gtk.Button(label="📁 Cargar")
+        load_ref_button.set_tooltip_text("Cargar técnica de referencia guardada")
         load_ref_button.connect('clicked', self.on_load_reference_clicked)
         buttons_box.append(load_ref_button)
         
         save_ref_button = Gtk.Button(label="💾 Guardar")
+        save_ref_button.set_tooltip_text("Guardar técnica actual como referencia")
         save_ref_button.connect('clicked', self.on_save_reference_clicked)
         buttons_box.append(save_ref_button)
         
-        buttons_row = Adw.ActionRow(title="Referencias")
+        buttons_row = Adw.ActionRow(title="📚 Gestión de Referencias")
         buttons_row.add_suffix(buttons_box)
         group.add(buttons_row)
         
         auto_learn_button = Gtk.Button(label="🧠 Auto-Learn")
+        auto_learn_button.set_tooltip_text("Entrenar el sistema automáticamente")
         auto_learn_button.connect('clicked', self.on_auto_learn_clicked)
         
-        learn_row = Adw.ActionRow(title="Aprendizaje Automático")
+        learn_row = Adw.ActionRow(title="🤖 Aprendizaje Automático")
         learn_row.add_suffix(auto_learn_button)
         group.add(learn_row)
         
         return group
+    
+    # === MANEJADORES DE EVENTOS ===
+    
+    def on_category_dropdown_changed(self, dropdown, param):
+        """Maneja el cambio en el dropdown de categorías"""
+        selected = dropdown.get_selected()
+        if selected < len(self.category_list):
+            self.current_category = self.category_list[selected]
+            self.update_technique_dropdown()
+            self.emit_technique_changed()
+    
+    def on_technique_changed(self, dropdown, param):
+        """Maneja el cambio de técnica"""
+        selected = dropdown.get_selected()
+        techniques = self.techniques_data.get(self.current_category, [])
+        
+        if selected < len(techniques):
+            self.current_technique = techniques[selected][0]
+            self.emit_technique_changed()
     
     def update_technique_dropdown(self):
         """Actualiza el dropdown de técnicas según la categoría"""
@@ -333,23 +333,8 @@ class ControlPanel(Gtk.Box):
         self.technique_dropdown.set_model(string_list)
         if len(techniques) > 0:
             self.technique_dropdown.set_selected(0)
-    
-    # Signal handlers
-    def on_category_changed(self, button, category_id):
-        """Maneja el cambio de categoría"""
-        if button.get_active():
-            self.current_category = category_id
-            self.update_technique_dropdown()
-            self.emit_technique_changed()
-    
-    def on_technique_changed(self, dropdown, param):
-        """Maneja el cambio de técnica"""
-        selected = dropdown.get_selected()
-        techniques = self.techniques_data.get(self.current_category, [])
-        
-        if selected < len(techniques):
-            self.current_technique = techniques[selected][0]
-            self.emit_technique_changed()
+            # Actualizar técnica actual al primer elemento
+            self.current_technique = techniques[0][0]
     
     def emit_technique_changed(self):
         """Emite señal de cambio de técnica"""

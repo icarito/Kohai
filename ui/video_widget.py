@@ -123,7 +123,7 @@ class VideoWidget(Gtk.Box):
         
         # Label para métricas en tiempo real
         self.metrics_label = Gtk.Label()
-        self.metrics_label.set_markup('<span size="small" color="white">Video: Activo (sin pose detection)</span>')
+        self.metrics_label.set_markup('<span size="small" color="white">Video: Activo</span>')
         self.metrics_label.set_halign(Gtk.Align.START)
         self.metrics_label.set_valign(Gtk.Align.START)
         self.metrics_label.set_margin_top(10)
