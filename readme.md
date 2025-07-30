@@ -93,8 +93,6 @@ kohai/
 ### Fase 1: Stances Básicos ✅
 - [x] Interfaz GTK4 responsiva
 - [x] Detección de pose en tiempo real
-- [x] Análisis de Sanchin-dachi
-- [x] Sistema de scoring
 
 ### Fase 2: Técnicas Dinámicas (En progreso)
 - [ ] Análisis de golpes básicos
@@ -108,24 +106,11 @@ kohai/
 
 ## 🤝 Contribuir
 
-¡Las contribuciones son bienvenidas! Especialmente de practicantes de Goju-Ryu que puedan aportar conocimiento técnico sobre las métricas ideales.
-
-1. Fork el proyecto
-2. Crea una rama para tu feature (`git checkout -b feature/nueva-tecnica`)
-3. Commit tus cambios (`git commit -am 'Agrega análisis de Mae-geri'`)
-4. Push a la rama (`git push origin feature/nueva-tecnica`)
-5. Abre un Pull Request
+¡Las contribuciones son bienvenidas! 
 
 ## 📄 Licencia
 
-Este proyecto está bajo la Licencia MIT. Ver `LICENSE` para más detalles.
+Este proyecto está bajo la Licencia GPLv3 (o posterior). Ver `LICENSE` para más detalles.
 
-## 🙏 Reconocimientos
 
-- **MediaPipe** por la excelente biblioteca de pose estimation
-- **Comunidad Goju-Ryu** por preservar las técnicas tradicionales
-- **Sensei Miyagi Chojun** (宮城長順) - fundador del Goju-Ryu
-
----
-
-*"La suavidad vence a la dureza, la tranquilidad vence al movimiento"* - Principio del Goju-Ryu
+*"La suavidad vence a la dureza, la tranquilidad vence al movimiento"*
