@@ -6,7 +6,7 @@
 
 ## ✨ Características
 
-- 🧘 **Análisis de Stances**: Sanchin-dachi, Zenkutsu-dachi, Shiko-dachi, Neko-ashi-dachi
+- 🧘 **Análisis de Posiciones**: Sanchin-dachi, Zenkutsu-dachi, Shiko-dachi, Neko-ashi-dachi
 - 👊 **Técnicas Dinámicas**: Golpes, patadas, bloqueos
 - 🥋 **Katas Completos**: Análisis secuencial de movimientos
 - 📊 **Métricas en Tiempo Real**: Scoring, feedback instantáneo
@@ -44,7 +44,7 @@ python main.py
 
 ### Uso Básico
 
-1. **Selecciona una categoría**: Stances, Golpes, Patadas, Bloqueos, o Katas
+1. **Selecciona una categoría**: Posiciones, Golpes, Patadas, Bloqueos, o Katas
 2. **Elige una técnica específica** del dropdown
 3. **Colócate frente a la cámara** y ajusta tu posición
 4. **Observa las métricas en tiempo real** en el panel lateral
@@ -60,11 +60,12 @@ python main.py
 
 ## 🎯 Roadmap
 
-### Fase 1: Stances Básicos ✅
+### Fase 1: Posiciones Básicas ✅
 - [x] Interfaz GTK4 responsiva
 - [x] Detección de pose en tiempo real
 - [x] Sistema de referencias con overlay azul
 - [x] Captura y guardado de poses
+- [x] Métricas en tiempo real para posiciones
 
 ### Fase 2: Técnicas Dinámicas (En progreso)
 - [ ] Análisis de golpes básicos
