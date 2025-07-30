@@ -50,36 +50,6 @@ python main.py
 4. **Observa las métricas en tiempo real** en el panel lateral
 5. **Captura o graba** tu técnica para análisis detallado
 
-## 📁 Estructura del Proyecto
-
-```
-kohai/
-├── main.py              # Punto de entrada de la aplicación
-├── ui/                  # Interfaz GTK4
-│   ├── main_window.py   # Ventana principal
-│   ├── video_widget.py  # Widget de video con pose overlay
-│   └── control_panel.py # Panel de controles lateral
-├── analysis/            # Módulos de análisis
-│   ├── pose_detector.py # Detector MediaPipe
-│   └── stance_analyzer.py # Analizador de stances
-├── data/               # Datos de la aplicación
-│   ├── references/     # Técnicas de referencia
-│   └── sessions/       # Sesiones de usuario
-├── spec.md            # Especificación técnica completa
-└── requirements.txt   # Dependencias Python
-```
-
-## 🥋 Stances Soportados
-
-### Sanchin-dachi (三戦立ち) - MVP
-- **Análisis**: Ancho de stance, ángulos de rodillas, simetría, alineación
-- **Métricas**: Score automático, feedback en tiempo real
-- **Ideal para**: Desarrollo de fuerza interna y estabilidad
-
-### Otros Stances (En desarrollo)
-- **Zenkutsu-dachi**: Posición adelantada
-- **Shiko-dachi**: Posición del sumo
-- **Neko-ashi-dachi**: Posición del gato
 
 ## 🛠️ Tecnologías
 
