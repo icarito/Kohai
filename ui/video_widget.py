@@ -292,11 +292,6 @@ class VideoWidget(Gtk.Box):
                         cv2.putText(display_frame, status, (10, 30), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                         
-                        # Añadir frame ID para debug
-                        frame_id = current_pose_result.get('frame_id', 0)
-                        cv2.putText(display_frame, f"Frame: {frame_id}", (10, 460), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                        
                         # Emitir señal de pose detectada de forma asíncrona
                         GLib.idle_add(self._emit_pose_signal, current_pose_result)
                     else:
@@ -537,21 +532,21 @@ class VideoWidget(Gtk.Box):
                 else:
                     points.append(None)
             
-            # Dibujar puntos de referencia con colores distintivos (magenta/morado)
+            # Dibujar puntos de referencia con colores distintivos (azules)
             for i, point in enumerate(points):
                 if point:
-                    # Colores distintivos para la referencia
-                    if i in [11, 12, 23, 24]:  # Torso - magenta claro
-                        color = (255, 100, 255)
+                    # Colores distintivos para la referencia en tonos azules
+                    if i in [11, 12, 23, 24]:  # Torso - azul claro
+                        color = (255, 150, 100)  # BGR: azul claro
                         radius = 4
-                    elif i in [13, 14, 15, 16]:  # Brazos - magenta
-                        color = (200, 0, 200)
+                    elif i in [13, 14, 15, 16]:  # Brazos - azul
+                        color = (200, 100, 0)  # BGR: azul
                         radius = 3
-                    elif i in [25, 26, 27, 28]:  # Piernas - morado
-                        color = (150, 0, 150)
+                    elif i in [25, 26, 27, 28]:  # Piernas - azul oscuro
+                        color = (150, 50, 0)  # BGR: azul oscuro
                         radius = 3
-                    else:  # Otros - magenta suave
-                        color = (180, 100, 180)
+                    else:  # Otros - azul suave
+                        color = (180, 120, 50)  # BGR: azul suave
                         radius = 2
                     
                     cv2.circle(ref_overlay, point, radius, color, -1)
@@ -572,14 +567,14 @@ class VideoWidget(Gtk.Box):
                 if (connection[0] < len(points) and connection[1] < len(points) and
                     points[connection[0]] and points[connection[1]]):
                     cv2.line(ref_overlay, points[connection[0]], points[connection[1]], 
-                            (255, 150, 255), 2)  # Líneas magenta
+                            (200, 120, 50), 2)  # Líneas azules
             
             # Aplicar overlay de referencia con transparencia baja
             cv2.addWeighted(ref_overlay, 0.3, frame, 0.7, 0, frame)
             
             # Agregar texto indicando que es la referencia
             cv2.putText(frame, "REFERENCIA", (10, height - 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 255), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 120, 50), 2)
             
             return frame
             

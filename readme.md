@@ -63,6 +63,8 @@ python main.py
 ### Fase 1: Stances Básicos ✅
 - [x] Interfaz GTK4 responsiva
 - [x] Detección de pose en tiempo real
+- [x] Sistema de referencias con overlay azul
+- [x] Captura y guardado de poses
 
 ### Fase 2: Técnicas Dinámicas (En progreso)
 - [ ] Análisis de golpes básicos
