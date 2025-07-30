@@ -6,7 +6,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 gi.require_version('GObject', '2.0')
 
-from gi.repository import Gtk, Adw, GLib, GObject
+from gi.repository import Gtk, Adw, GLib, GObject, Gio
 
 
 class ControlPanel(Gtk.Box):
@@ -17,6 +17,7 @@ class ControlPanel(Gtk.Box):
         'capture-requested': (GObject.SignalFlags.RUN_FIRST, None, (int, int)),
         'record-requested': (GObject.SignalFlags.RUN_FIRST, None, (int, int)),
         'overlay-toggled': (GObject.SignalFlags.RUN_FIRST, None, (bool,)),
+        'reference-loaded': (GObject.SignalFlags.RUN_FIRST, None, (object,)),
     }
     
     def __init__(self):
@@ -92,6 +93,9 @@ class ControlPanel(Gtk.Box):
         }
         
         self.setup_ui()
+        
+        # Emitir señal inicial para establecer la técnica por defecto
+        GLib.idle_add(self.emit_technique_changed)
     
     def setup_ui(self):
         """Configura la interfaz del panel de control con técnicas en la parte superior."""
@@ -276,7 +280,8 @@ class ControlPanel(Gtk.Box):
         buttons_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         buttons_box.set_homogeneous(True)
         
-        load_ref_button = Gtk.Button(label="📁 Cargar")
+        # Botón para cargar referencia
+        load_ref_button = Gtk.Button(label="📁 Cargar Referencia")
         load_ref_button.set_tooltip_text("Cargar técnica de referencia guardada")
         load_ref_button.connect('clicked', self.on_load_reference_clicked)
         buttons_box.append(load_ref_button)
@@ -300,8 +305,68 @@ class ControlPanel(Gtk.Box):
         
         return group
     
+    # === ACTUALIZACIONES DE UI ===
+
+    def update_pose_status(self, pose_data):
+        """Actualiza el label de estado de la pose."""
+        def _update():
+            if not pose_data:
+                status_text = '<span color="orange">Desconectado</span>'
+            elif pose_data.get('pose_detected'):
+                confidence = pose_data.get('pose_confidence', 'unknown')
+                if confidence == 'high':
+                    status_text = '<span color="green"><b>Detectada</b></span>'
+                elif confidence == 'interpolated':
+                    status_text = '<span color="yellow">Tracking...</span>'
+                elif confidence == 'fading':
+                    status_text = '<span color="orange">Perdiendo...</span>'
+                else:
+                    status_text = '<span color="green">Detectada</span>'
+            else:
+                status_text = '<span color="red">No Detectada</span>'
+            self.pose_status_label.set_markup(status_text)
+            return False
+        GLib.idle_add(_update)
+
+    def update_metrics(self, metrics):
+        """Actualiza los widgets de métricas con nuevos datos."""
+        def _update():
+            # Limpiar métricas anteriores
+            for row in self.metrics_rows:
+                self.metrics_group.remove(row)
+            self.metrics_rows.clear()
+
+            if not metrics:
+                self.score_label.set_markup("--/100")
+                return False
+
+            # Actualizar puntuación
+            if 'score' in metrics:
+                score = metrics['score']
+                grade = metrics.get('grade', '')
+                score_text = f"<b>{score:.0f}</b>/100 <small>({grade})</small>"
+                self.score_label.set_markup(score_text)
+
+            # Obtener las métricas a mostrar para la técnica actual
+            metrics_to_display = self.stance_metric_map.get(self.current_technique, [])
+
+            # Crear y añadir nuevas filas de métricas
+            for key, title, fmt in metrics_to_display:
+                if key in metrics:
+                    value = metrics[key]
+                    value_str = fmt.format(value)
+                    label = Gtk.Label()
+                    label.set_halign(Gtk.Align.END)
+                    label.set_markup(f"<tt>{value_str}</tt>")
+                    row = Adw.ActionRow(title=title)
+                    row.add_suffix(label)
+                    self.metrics_group.add(row)
+                    self.metrics_rows.append(row)
+            return False
+        GLib.idle_add(_update)
+
     # === MANEJADORES DE EVENTOS ===
-    
+
     def on_category_dropdown_changed(self, dropdown, param):
         """Maneja el cambio en el dropdown de categorías"""
         selected = dropdown.get_selected()
@@ -347,79 +412,86 @@ class ControlPanel(Gtk.Box):
         self.emit('capture-requested', countdown, duration)
     
     def on_record_clicked(self, button):
-        """Maneja click en botón de grabación"""
+        """Maneja la acción de grabación."""
         countdown = int(self.countdown_spin.get_value())
         duration = int(self.duration_spin.get_value())
+        print(f"Grabación solicitada: countdown={countdown}s, duración={duration}s")
         self.emit('record-requested', countdown, duration)
     
-    def on_calibrate_clicked(self, button):
-        """Maneja click en botón de calibración"""
-        # Lógica de calibración (placeholder)
-        self.pose_status_label.set_label("Calibrando...")
-        GLib.timeout_add_seconds(2, self.calibration_complete, None)
-    
-    def calibration_complete(self, user_data):
-        """Completa el proceso de calibración"""
-        self.pose_status_label.set_label("Calibración completa")
-        return False  # Para eliminar el timeout
-    
     def on_overlay_toggled(self, switch, param):
-        """Maneja toggle del overlay"""
+        """Maneja el evento de activación/desactivación del overlay."""
         active = switch.get_active()
         print(f"Overlay: {'ON' if active else 'OFF'}")
         self.emit('overlay-toggled', active)
     
     def on_load_reference_clicked(self, button):
-        """Maneja carga de referencia"""
-        print("Cargar referencia solicitado")
+        """Maneja la acción de cargar una referencia."""
+        print("Cargar referencia solicitado desde el panel de control.")
+        
+        # Crear diálogo de selección de archivos
+        dialog = Gtk.FileChooserDialog(
+            title="Seleccionar archivo de referencia",
+            transient_for=self.get_root(),
+            action=Gtk.FileChooserAction.OPEN
+        )
+        
+        # Agregar botones
+        dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Abrir", Gtk.ResponseType.ACCEPT)
+        
+        # Filtro para archivos JSON
+        filter_json = Gtk.FileFilter()
+        filter_json.set_name("Archivos JSON (*.json)")
+        filter_json.add_pattern("*.json")
+        dialog.add_filter(filter_json)
+        
+        # Establecer directorio inicial
+        try:
+            import os
+            ref_dir = os.path.abspath("data/references")
+            if os.path.exists(ref_dir):
+                dialog.set_current_folder(Gio.File.new_for_path(ref_dir))
+        except Exception as e:
+            print(f"No se pudo establecer directorio inicial: {e}")
+        
+        # Mostrar diálogo de forma asíncrona
+        dialog.connect('response', self.on_file_dialog_response)
+        dialog.present()
+    
+    def on_file_dialog_response(self, dialog, response):
+        """Maneja la respuesta del diálogo de selección de archivos."""
+        if response == Gtk.ResponseType.ACCEPT:
+            file = dialog.get_file()
+            if file:
+                filepath = file.get_path()
+                print(f"Archivo seleccionado: {filepath}")
+                self.load_reference_file(filepath)
+        
+        dialog.destroy()
+    
+    def load_reference_file(self, filepath):
+        """Carga un archivo de referencia y emite señal para mostrarlo."""
+        try:
+            import json
+            
+            with open(filepath, 'r') as f:
+                reference_data = json.load(f)
+            
+            print(f"Referencia cargada: {reference_data.get('technique', 'Desconocida')}")
+            
+            # Emitir señal para que el VideoWidget cargue la referencia
+            self.emit('reference-loaded', reference_data)
+            
+        except Exception as e:
+            print(f"Error cargando referencia: {e}")
+            # TODO: Mostrar diálogo de error
     
     def on_save_reference_clicked(self, button):
-        """Maneja guardado como referencia"""
-        print("Guardar referencia solicitado")
+        """Maneja la acción de guardar una referencia."""
+        print("Guardar referencia solicitado desde el panel de control.")
+        # Aquí puedes agregar la lógica para guardar la referencia actual si es necesario.
     
     def on_auto_learn_clicked(self, button):
-        """Maneja auto-learning"""
-        print("Auto-learning solicitado")
-    
-    def update_pose_status(self, pose_data):
-        """Actualiza el estado de detección de pose"""
-        if pose_data and pose_data.get('pose_detected'):
-            self.pose_status_label.set_label("✓ Pose detectada")
-            self.pose_status_label.add_css_class("success")
-        else:
-            self.pose_status_label.set_label("✗ Sin pose")
-            self.pose_status_label.remove_css_class("success")
-    
-    def update_metrics(self, metrics):
-        """Actualiza las métricas mostradas"""
-        if not metrics:
-            return
-        
-        if 'score' in metrics:
-            self.score_label.set_label(f"{metrics['score']:.0f}/100")
-        
-        for row in self.metrics_rows:
-            self.metrics_group.remove(row)
-        self.metrics_rows.clear()
-        
-        # Usar el mapa de métricas para la técnica actual
-        metric_items_to_display = []
-        if self.current_category == "stances":
-            metric_items_to_display = self.stance_metric_map.get(self.current_technique, [])
-
-        # Si no es un stance o no está en el mapa, no mostrar métricas detalladas
-        if not metric_items_to_display:
-            return
-
-        for metric_key, metric_title, format_string in metric_items_to_display:
-            if metric_key in metrics:
-                value_label = Gtk.Label(label=format_string.format(metrics[metric_key]))
-                value_label.set_halign(Gtk.Align.END)
-                
-                row = Adw.ActionRow(title=metric_title)
-                row.add_suffix(value_label)
-                
-                self.metrics_group.add(row)
-                self.metrics_rows.append(row)
-
-GObject.type_register(ControlPanel)
+        """Maneja la acción de aprendizaje automático."""
+        print("Aprendizaje automático solicitado desde el panel de control.")
+        # Aquí puedes agregar la lógica para el aprendizaje automático si es necesario.

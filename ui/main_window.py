@@ -127,6 +127,7 @@ class KohaiMainWindow(Adw.ApplicationWindow):
         self.control_panel.connect('capture-requested', self.on_capture_requested)
         self.control_panel.connect('record-requested', self.on_record_requested)
         self.control_panel.connect('overlay-toggled', self.on_overlay_toggled)
+        self.control_panel.connect('reference-loaded', self.on_reference_loaded)
         
         # Conectar señales del widget de video al panel de control
         self.video_widget.connect('pose-detected', self.on_pose_detected)
@@ -139,8 +140,21 @@ class KohaiMainWindow(Adw.ApplicationWindow):
         """
         print("Ventana mapeada. Iniciando proceso de análisis de pose.")
         self.video_widget.start_analysis_process()
+        
+        # Asegurar que el VideoWidget tiene la técnica inicial del ControlPanel
+        GLib.idle_add(self.sync_initial_technique)
+        
         # Desconectar para que no se llame de nuevo si la ventana se oculta y se vuelve a mostrar.
         self.disconnect_by_func(self.on_window_mapped)
+    
+    def sync_initial_technique(self):
+        """Sincroniza la técnica inicial del ControlPanel con el VideoWidget"""
+        self.video_widget.set_active_technique(
+            self.control_panel.current_category,
+            self.control_panel.current_technique
+        )
+        print(f"Técnica inicial sincronizada: {self.control_panel.current_category} -> {self.control_panel.current_technique}")
+        return False  # No repetir
         
     def set_initial_paned_position(self):
         """Establece la posición inicial del panel (75% video)"""
@@ -159,7 +173,7 @@ class KohaiMainWindow(Adw.ApplicationWindow):
     def on_capture_requested(self, control_panel, countdown, duration):
         """Maneja la solicitud de captura de pose"""
         print(f"Captura solicitada: countdown={countdown}s, duration={duration}s")
-        self.video_widget.start_capture(countdown, duration)
+        self.video_widget.start_capture(countdown)
     
     def on_record_requested(self, control_panel, countdown, duration):
         """Maneja la solicitud de grabación de kata/técnica"""
@@ -179,6 +193,11 @@ class KohaiMainWindow(Adw.ApplicationWindow):
     def on_overlay_toggled(self, control_panel, enabled):
         """Maneja el toggle del overlay de pose detection"""
         self.video_widget.set_overlay_enabled(enabled)
+    
+    def on_reference_loaded(self, control_panel, reference_data):
+        """Maneja la carga de una referencia"""
+        print(f"Referencia cargada en main window: {reference_data.get('technique', 'Desconocida')}")
+        self.video_widget.load_reference_data(reference_data)
     
     # Menu callbacks
     def on_calibrate_clicked(self, button):

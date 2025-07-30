@@ -29,7 +29,7 @@ class VideoWidget(Gtk.Box):
         # Estado
         self.camera = None
         self.running = False
-        self.current_technique = None
+        self.current_technique = "sanchin-dachi"  # Técnica por defecto
         self.current_category = "stances"
         self.capturing = False
         self.recording = False
@@ -46,6 +46,11 @@ class VideoWidget(Gtk.Box):
         self.overlay_enabled = True
         self.frame_skip_counter = 0
         self.last_frame_from_worker = None  # Para almacenar último frame del worker
+        
+        # Datos de referencia
+        self.reference_data = None
+        self.reference_landmarks = None
+        self.show_reference_overlay = True
         
         # Estados para suavidad de pose
         self.last_pose_result = None
@@ -71,17 +76,40 @@ class VideoWidget(Gtk.Box):
         # Esto evita que GTK se bloquee esperando a la cámara o al subproceso
         GLib.idle_add(self._async_start_everything)
     
+    def process_frame(self, frame):
+        """Procesa un frame y actualiza el overlay"""
+        if self.pose_detector:
+            pose_result = self.pose_detector.process_frame(frame)
+            if pose_result:
+                self.last_pose_result = pose_result
+                self.last_pose_timestamp = time.time()
+
+                # Enviar landmarks al StanceAnalyzer
+                metrics = self.stance_analyzer.analyze(pose_result)
+                self.emit('metrics-updated', metrics)
+
+                # Dibujar overlay
+                self.draw_overlay(frame, pose_result)
+
+        return frame
+
+    def draw_overlay(self, frame, pose_result):
+        """Dibuja los landmarks en el frame"""
+        for landmark in pose_result['landmarks']:
+            x, y = int(landmark[0] * frame.shape[1]), int(landmark[1] * frame.shape[0])
+            cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
+    
     def _async_start_everything(self):
         """Inicia cámara y detector de forma asíncrona sin bloquear GTK"""
         try:
             print("Iniciando cámara de forma asíncrona...")
             
-            # 1. Primero inicializar la cámara
+            # 1. Inicializar la cámara
             self.init_camera()
             
             print("Creando detector en proceso asíncrono...")
             
-            # 2. Luego crear el detector 
+            # 2. Crear el detector si no existe
             if self.pose_detector is None:
                 self.pose_detector = SubprocessPoseDetector()
             
@@ -377,6 +405,11 @@ class VideoWidget(Gtk.Box):
         try:
             height, width = frame.shape[:2]
             
+            # Primero dibujar la referencia si está disponible y habilitada
+            if (self.reference_landmarks and self.show_reference_overlay and 
+                self.overlay_enabled):
+                frame = self._draw_reference_overlay(frame, self.reference_landmarks)
+            
             # Ajustar opacidad y colores basado en confianza
             if confidence == 'high':
                 alpha = 1.0
@@ -454,6 +487,106 @@ class VideoWidget(Gtk.Box):
             print(f"Error dibujando landmarks: {e}")
             return frame  # Devolver frame original en caso de error
     
+    def _draw_reference_overlay(self, frame, reference_landmarks):
+        """Dibuja la pose de referencia como overlay semitransparente"""
+        try:
+            height, width = frame.shape[:2]
+            
+            # Crear overlay para la referencia
+            ref_overlay = frame.copy()
+            
+            # Manejar diferentes formatos de landmarks de referencia
+            points = []
+            
+            # Si reference_landmarks es un diccionario (datos promedio o formato incorrecto)
+            if isinstance(reference_landmarks, dict):
+                # Verificar si es un formato incorrecto (un solo landmark promedio)
+                if 'x' in reference_landmarks and 'y' in reference_landmarks:
+                    print("Advertencia: Formato de referencia incorrecto detectado (landmarks promedio en lugar de lista)")
+                    # No se puede dibujar un solo punto promedio, necesitamos 33 landmarks
+                    return frame
+                else:
+                    # Convertir diccionario a lista de landmarks
+                    landmark_list = []
+                    # Asumiendo que las claves son índices de landmarks
+                    for key in sorted(reference_landmarks.keys()):
+                        if isinstance(key, str) and key.isdigit():
+                            landmark_list.append(reference_landmarks[key])
+                    reference_landmarks = landmark_list
+            
+            # Verificar que tenemos suficientes landmarks para dibujar
+            if not reference_landmarks or len(reference_landmarks) < 10:
+                print(f"Advertencia: Insuficientes landmarks de referencia ({len(reference_landmarks) if reference_landmarks else 0})")
+                return frame
+            
+            # Procesar landmarks de referencia
+            for i, landmark in enumerate(reference_landmarks):
+                if isinstance(landmark, dict):
+                    # Formato dict con x, y, z, visibility
+                    if landmark.get('visibility', 0) > 0.5:
+                        x = int(landmark['x'] * width)
+                        y = int(landmark['y'] * height)
+                        points.append((x, y))
+                    else:
+                        points.append(None)
+                elif isinstance(landmark, (list, tuple)) and len(landmark) >= 2:
+                    # Formato lista/tupla [x, y, ...]
+                    x = int(landmark[0] * width)
+                    y = int(landmark[1] * height)
+                    points.append((x, y))
+                else:
+                    points.append(None)
+            
+            # Dibujar puntos de referencia con colores distintivos (magenta/morado)
+            for i, point in enumerate(points):
+                if point:
+                    # Colores distintivos para la referencia
+                    if i in [11, 12, 23, 24]:  # Torso - magenta claro
+                        color = (255, 100, 255)
+                        radius = 4
+                    elif i in [13, 14, 15, 16]:  # Brazos - magenta
+                        color = (200, 0, 200)
+                        radius = 3
+                    elif i in [25, 26, 27, 28]:  # Piernas - morado
+                        color = (150, 0, 150)
+                        radius = 3
+                    else:  # Otros - magenta suave
+                        color = (180, 100, 180)
+                        radius = 2
+                    
+                    cv2.circle(ref_overlay, point, radius, color, -1)
+            
+            # Dibujar conexiones de referencia
+            important_connections = [
+                # Torso principal
+                (11, 12), (11, 23), (12, 24), (23, 24),
+                # Brazos principales  
+                (11, 13), (13, 15), (12, 14), (14, 16),
+                # Piernas principales
+                (23, 25), (25, 27), (24, 26), (26, 28),
+                # Cabeza principal
+                (0, 1), (1, 2), (2, 3), (0, 4), (4, 5), (5, 6)
+            ]
+            
+            for connection in important_connections:
+                if (connection[0] < len(points) and connection[1] < len(points) and
+                    points[connection[0]] and points[connection[1]]):
+                    cv2.line(ref_overlay, points[connection[0]], points[connection[1]], 
+                            (255, 150, 255), 2)  # Líneas magenta
+            
+            # Aplicar overlay de referencia con transparencia baja
+            cv2.addWeighted(ref_overlay, 0.3, frame, 0.7, 0, frame)
+            
+            # Agregar texto indicando que es la referencia
+            cv2.putText(frame, "REFERENCIA", (10, height - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 255), 2)
+            
+            return frame
+            
+        except Exception as e:
+            print(f"Error dibujando overlay de referencia: {e}")
+            return frame
+    
     def update_video_display(self, frame):
         """Actualiza la imagen mostrada en la UI"""
         try:
@@ -488,31 +621,114 @@ class VideoWidget(Gtk.Box):
             print(f"Error actualizando display: {e}")
     
     def set_active_technique(self, category, technique):
-        """Establece la técnica activa para análisis"""
+        """Establece la técnica activa desde el ControlPanel"""
         self.current_category = category
         self.current_technique = technique
-        print(f"Técnica activa: {category} -> {technique}")
+        print(f"Técnica activa establecida: {category} -> {technique}")
+
+    def set_active_reference(self, reference):
+        """Establece la referencia activa desde el ControlPanel"""
+        self.current_reference = reference
+        print(f"Referencia activa establecida: {reference}")
     
-    def start_capture(self, countdown, duration):
-        """Inicia captura de pose con countdown"""
-        print(f"Iniciando captura: countdown={countdown}s, duration={duration}s")
-        
-        def countdown_thread():
+    def start_capture(self, countdown):
+        """Inicia captura de pose con countdown y calcula el promedio de 3 imágenes"""
+        print(f"Iniciando captura: countdown={countdown}s")
+
+        def capture_thread():
             # Mostrar countdown
             for i in range(countdown, 0, -1):
                 GLib.idle_add(self.show_countdown, str(i))
                 time.sleep(1)
-            
+
             GLib.idle_add(self.hide_countdown)
-            
-            # Capturar por duration segundos
-            self.capturing = True
-            time.sleep(duration)
-            self.capturing = False
-            
-            print("Captura completada")
+
+            # Capturar 3 imágenes consecutivas
+            captured_landmarks = []
+            for _ in range(3):
+                if self.last_pose_result:
+                    captured_landmarks.append(self.last_pose_result['landmarks'])
+                time.sleep(0.1)  # Pausa breve entre capturas
+
+            # Calcular promedio de landmarks
+            if captured_landmarks:
+                averaged_landmarks = self.calculate_average_landmarks(captured_landmarks)
+                self.save_captured_data(averaged_landmarks)
+                print("Captura completada con promedio calculado")
+
+        threading.Thread(target=capture_thread, daemon=True).start()
+
+    def calculate_average_landmarks(self, landmarks_list):
+        """Calcula el promedio de una lista de landmarks"""
+        import numpy as np
+
+        # Verificar que landmarks_list no esté vacío
+        if not landmarks_list:
+            raise ValueError("La lista de landmarks está vacía")
+
+        # Cada elemento en landmarks_list debería ser una lista de 33 landmarks
+        if not landmarks_list[0] or len(landmarks_list[0]) == 0:
+            raise ValueError("Los landmarks están vacíos")
+
+        num_landmarks = len(landmarks_list[0])  # Debería ser 33
+        num_captures = len(landmarks_list)
         
-        threading.Thread(target=countdown_thread, daemon=True).start()
+        # Inicializar arrays para promediar
+        averaged_landmarks = []
+        
+        # Calcular promedio para cada landmark (0-32)
+        for landmark_idx in range(num_landmarks):
+            x_values = []
+            y_values = []
+            z_values = []
+            visibility_values = []
+            
+            # Recopilar valores de todas las capturas para este landmark
+            for capture_landmarks in landmarks_list:
+                if landmark_idx < len(capture_landmarks):
+                    landmark = capture_landmarks[landmark_idx]
+                    x_values.append(landmark['x'])
+                    y_values.append(landmark['y'])
+                    z_values.append(landmark['z'])
+                    visibility_values.append(landmark['visibility'])
+            
+            # Calcular promedios
+            avg_landmark = {
+                'x': np.mean(x_values),
+                'y': np.mean(y_values),
+                'z': np.mean(z_values),
+                'visibility': np.mean(visibility_values)
+            }
+            
+            averaged_landmarks.append(avg_landmark)
+        
+        return averaged_landmarks
+
+    def save_captured_data(self, averaged_landmarks):
+        """Guarda los landmarks promedio y metadatos en un archivo JSON"""
+        import json
+        from datetime import datetime
+
+        # Verificar que la técnica actual está configurada
+        if not self.current_technique:
+            print("Advertencia: Técnica no configurada, usando técnica por defecto 'sanchin-dachi'")
+            self.current_technique = "sanchin-dachi"
+            self.current_category = "stances"
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"data/references/captured_pose_{timestamp}.json"
+
+        data = {
+            "landmarks": averaged_landmarks,
+            "timestamp": timestamp,
+            "technique": self.current_technique,
+            "category": self.current_category
+        }
+
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=4)
+
+        print(f"Datos capturados guardados en {filename}")
     
     def start_recording(self, countdown, duration):
         """Inicia grabación de kata/técnica con countdown"""
@@ -572,6 +788,57 @@ class VideoWidget(Gtk.Box):
         if self.camera:
             self.camera.release()
 
+    def load_reference_json(self, filepath):
+        """Carga un archivo JSON de referencia y calcula métricas"""
+        import json
 
+        try:
+            # Leer el archivo JSON
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+
+            # Verificar que el archivo contiene landmarks
+            if 'landmarks' not in data:
+                raise ValueError("El archivo JSON no contiene landmarks")
+
+            # Extraer landmarks y calcular métricas
+            reference_landmarks = data['landmarks']
+            metrics = self.stance_analyzer.analyze_stance(self.current_technique, [reference_landmarks])
+
+            # Emitir las métricas calculadas
+            if metrics:
+                print(f"Métricas calculadas desde referencia: {metrics}")
+                self.emit('metrics-updated', metrics)
+            else:
+                print("No se pudieron calcular métricas desde la referencia")
+
+        except Exception as e:
+            print(f"Error al cargar el archivo JSON de referencia: {e}")
+    
+    def on_technique_changed(self, combo):
+        """Actualiza la técnica activa cuando se selecciona una nueva opción"""
+        self.current_technique = combo.get_active_text()
+        print(f"Técnica cambiada a: {self.current_technique}")
+    
+    def load_reference_data(self, reference_data):
+        """Carga datos de referencia para mostrar overlay de comparación"""
+        try:
+            self.reference_data = reference_data
+            self.reference_landmarks = reference_data.get('landmarks', [])
+            
+            technique = reference_data.get('technique', 'Desconocida')
+            timestamp = reference_data.get('timestamp', 'Desconocido')
+            
+            print(f"Referencia cargada: {technique} (capturada: {timestamp})")
+            print(f"Landmarks de referencia: {len(self.reference_landmarks) if isinstance(self.reference_landmarks, list) else 'datos de landmarks disponibles'}")
+            
+            # Si la referencia no coincide con la técnica actual, mostrar advertencia
+            if technique != self.current_technique:
+                print(f"Advertencia: Referencia es de '{technique}' pero técnica actual es '{self.current_technique}'")
+            
+        except Exception as e:
+            print(f"Error cargando datos de referencia: {e}")
+            self.reference_data = None
+            self.reference_landmarks = None
 # Registrar el tipo para señales
 GObject.type_register(VideoWidget)
